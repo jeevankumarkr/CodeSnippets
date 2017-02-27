@@ -1,0 +1,1064 @@
+needs(caret)
+library(readr)
+needs(xgboost)
+needs(ggplot2)
+needs(R.utils)
+needs(gridExtra)
+library(lubridate)
+library(data.table)
+needs(Matrix)
+needs(plyr)
+require(Hmisc)
+library(maps)
+library(maptools)
+library(sp)
+library(corrplot)
+library(data.table)
+library(e1071)
+set.seed(1234)
+
+inactive <- read.csv("InactiveAccounts-LicenseReview v0.csv", na.strings =c("NA","NaN", " ","","N/A"))
+
+user <- read.csv("User_Att_removed_columns.csv", na.strings =c("NA","NaN", " ","","N/A"))
+
+#train<- merge(x=inactive, y=user, by.x="SMTP", by.y="Email", all.x = TRUE)
+
+old <- read.csv("Office 365 - Licenses true-down 2016_previous revoked.csv", na.strings = c("NA","NaN"," ", "","N/A"))
+
+
+# Merge only common elements
+
+inactive_subset <- subset(inactive, select = c(samAccountName,when.Created,O365.License,Action))
+
+old_subset <- subset(old, select = c(samAccountName,when.Created,O365.License,Action))
+
+merge1 <- Reduce(function(...) merge(... , all = T, by=c("samAccountName","when.Created","O365.License","Action")),list(inactive_subset, old_subset), accumulate=F )
+
+merge2 <- Reduce(function(...) merge(... , all = T, by =c("samAccountName")), list(merge1,user),accumulate = F)
+
+write.csv(merge2,"merge2.csv")
+
+
+train <- subset(merge2, select = -c(Password_Last_Changed,EmployeeID,PostalCode,CreationTimeStamp,UIU_Lastchange,WD_EmployeeID))
+
+
+train1 <- train
+
+str(train1)
+
+train2 <- train1
+
+train3 <- train2[ which(train2$O365.License=='E3' | train2$O365.License=='E1'),]
+
+train3$Action <- as.character(train3$Action)
+
+train3$Action[is.na(train3$Action)] <- "N"
+
+train3$Action <- as.factor(train3$Action)
+
+train3 <- train3[!train3$Action == "Downgrade", ]
+
+train3 <- train3[which(train3$Action=='N' | train3$Action=='Revoke license'),]
+
+str(train3$Action)
+
+write.csv(train3,"train3.csv")
+
+
+========================================================================================================
+  ===================================================================================================
+
+old1<- old[,c("Primary.Email.Address","Action")]
+
+train2 <- merge(x = train, y = old1, by.x = "SMTP", by.y = "Primary.Email.Address", all.x = TRUE)
+
+train3 <- train2
+
+train <- read.csv("merge_raw.csv",  na.strings =c("NA","NaN", " ",""))
+
+Action <- train2[,c("Action.x", "Action.y")]
+
+train3$Action.x <- as.character(train3$Action.x)
+
+train3$Action.x[is.na(Action$Action.x)] <- " "
+
+train3$Action.y <- as.character(train3$Action.y)
+
+train3$Action.y[is.na(train3$Action.y)] <- " "
+
+train3$Action.z <- paste(train3$Action.x,train3$Action.y)
+
+
+write.csv(train3,"train3.csv")
+
+write.csv(Action,"Action.csv")
+
+Action <- sapply(Action, as.factor)
+
+str(Action)
+
+# The proportion of NA values.
+
+length(train[is.na(train)])/(ncol(train)*nrow(train)) 
+
+# Check for dupicate rows.
+
+nrow(train) - nrow(unique(train))
+
+# Lets look at the columns with only one unique value.
+
+col_ct = sapply(train, function(x) length(unique(x)))
+cat("Constant feature count:", length(col_ct[col_ct==1]))
+cat("Constant feature count:", names(col_ct[col_ct==1]))
+
+#  remove these columns with only one unique value
+train1 <- train[, !names(train) %in% names(col_ct[col_ct==1])]
+
+str(train1)
+
+# Sampling
+
+require(caret)
+ind <- createDataPartition(HC4$Action, p=.7, list = F, times = 1)
+train <- HC4[ ind,]
+test  <- HC4[-ind,]
+
+
+xtrain <- train[,-8]
+xtest <- test[,-8]
+
+ytest<- test$Action
+
+
+# Remove variables like name etc which has high dimentionality
+
+train4 <- read.csv("train3.csv")
+
+train4 <- train4[!train4$samAccountName == "#N/A", ]
+
+train4$X <- NULL
+
+
+write.csv(train4,"train4.csv")
+
+train5<- train4
+
+
+
+
+train5 <- subset(train4, select = -c(AccountType,Description,Exchange_Server,Password_Set_To_Expire,Dept_Number))
+
+train5[train5 == "?"] <- NA
+
+# remove columns if SID is NA as most of the variables also be NA
+train5 <- train5[!(is.na(train5$SID) | train5$SID==""), ]
+
+# remove rows where bUsiness is NA and Action is N
+
+train6<- train5
+train6 <- train6[(!is.na(train6$Business_Segment) | train6$Action != 'N'),]
+
+# remove rows where Legal Entity is NA and Action is N
+
+train6 <- train6[(!is.na(train6$LegalEntity) | train6$Action != 'N'),]
+
+# remove employee type NA with Action N
+
+train6 <- train6[(!is.na(train6$EmployeeType) | train6$Action != 'N'),]
+
+write.csv(train6, "train6_cleaned_without_NA.csv")
+
+# Remove cost center from the department
+
+train7<- train6
+
+train7$Department <- gsub("^.*? ","", x=train7$Department)
+
+write.csv(train7,"train7_cleaned_department.csv")
+
+train7$when.Created <- as.character(train7$when.Created)
+
+train7$when.Created <- strptime(train7$when.Created, format = "%m/%d/%Y %H:%M", tz = "")
+
+train7$LastLogonTimeStamp <- as.character(train7$LastLogonTimeStamp)
+
+train7$LastLogonTimeStamp <- strptime(train7$LastLogonTimeStamp, format = "%m/%d/%Y %H:%M", tz = "")
+
+train7$when.Created <- as.Date(train7$when.Created)
+train7$LastLogonTimeStamp <- as.Date(train7$LastLogonTimeStamp)
+
+
+train7 <- train7[sapply(train7, function(x) length(levels(factor(x,exclude=NULL)))>1)]
+
+
+train7<- read.csv("train7_cleaned_department.csv", stringsAsFactors = F)
+
+# change all NAs to 0
+
+train7[is.na(train7)] <- 0
+
+train8<- train7
+
+write.csv(train8, "train8_all_na_to_0.csv")
+
+train8<- train8[,-1]
+
+train8 <- read.csv("train8_all_na_to_0.csv", na.strings =c("NA","NaN"," ","","N/A","na","Na"))
+
+train8[is.na(train8)] <- 0
+
+train8 <- train8[sapply(train8, function(x) length(levels(factor(x,exclude=NULL)))>1)]
+
+head(train8)
+
+######Important Feature Selection
+
+train8 <- read.csv("train8_all_na_to_0.csv", na.strings =c("NA","NaN"," ","","N/A","na","Na","#N/A"))
+
+#Remove rows with NA
+
+new_DF <- train8[rowSums(is.na(train8)) > 0,]
+
+train8 <- train8[complete.cases(train8),]
+
+
+# Change the when created and lastlogin stamp to date
+
+train8$when.Created <- as.character(train8$when.Created)
+
+train8$when.Created <- strptime(train8$when.Created, format = "%m/%d/%Y %H:%M", tz = "")
+
+train8$LastLogonTimeStamp <- as.character(train8$LastLogonTimeStamp)
+
+train8$LastLogonTimeStamp <- strptime(train8$LastLogonTimeStamp, format = "%m/%d/%Y %H:%M", tz = "")
+
+train8$when.Created <- as.Date(train8$when.Created)
+train8$LastLogonTimeStamp <- as.Date(train8$LastLogonTimeStamp)
+
+
+#Remove rows with NA
+
+new_DF <- train8[rowSums(is.na(train8)) > 0,]
+
+#impute NA of LastLogonTimeStamp to 2016-09-15
+
+train8$LastLogonTimeStamp[is.na(train8$LastLogonTimeStamp)] <- "2016-09-15"
+
+
+# Feature selection using Fselection feature importance
+
+library(FSelector)
+weights <- information.gain(Action~., train8)
+
+
+# Use lasso for important features
+
+## Date from feature hashing
+
+library(glmnet)
+
+fit.lasso=glmnet(objTrain_hashed, objTrain[,outcomeName], alpha = 1, family = "binomial")
+plot(fit.lasso,xvar="lambda",label=TRUE)
+
+plot(fit.lasso,xvar="dev",label=TRUE)
+
+
+coef(cv.lasso, s = "lambda.min")[which(coef(cv.lasso, s = "lambda.min") != 0)]
+
+colnames(train8)[which(coef(cv.lasso, s = "lambda.min") != 0)]
+
+cv.lasso=cv.glmnet(objTrain_hashed, objTrain[,outcomeName],alpha = 1, family = "binomial")
+
+coef(fit.lasso)[,2]
+
+plot(cv.lasso)
+
+coef(cv.lasso)
+
+best_lambda <- cv.lasso$lambda.1se
+
+best_lambda
+
+
+# Working with class imbalance
+
+# Split the data for train and test
+
+train8 <- read.csv("train8_all_na_to_0.csv")
+
+ind <- createDataPartition(train8$Action, p=.7, list = F, times = 1)
+train <- train8[ ind,]
+test  <- train8[-ind,]
+
+xtrain <- train[,-4]
+xtest <- test[,-4]
+
+ytest<- test$Action
+
+
+#check table - for class imbalance
+table(objTest$Action)
+
+
+#check classes distribution
+prop.table(table(objTest$Action))
+
+
+#Install Package ROSE and rpart
+
+#Run a model to check initial accuracy before sampling
+treelic <- rpart(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = train)
+pred.treelic <- predict(treelic, newdata = test)
+
+#accuracy.meas, it computes important metrics such as precision, recall & F measure
+accuracy.meas(test$Action, pred.treelic[,2])
+
+#check ROC to test if model is worth
+roc.curve(test$Action, pred.treelic[,2], plotit = F)
+
+#confusion matrix
+
+# Get prediction as a class for rpart and not as probability
+
+pred.treelic <- predict(treelic, newdata = test, type = "class")
+
+# summarize results
+confusionMatrix(pred.treelic, test$Action)
+
+# 1 - over sampling - Do over sampling to make data more proportional
+data_balanced_over <- ovun.sample(Action ~ ., data = train, method = "over")$data
+table(data_balanced_over$Action)
+
+# Perform model based on over sampling and verify the results
+
+treelic <- rpart(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = data_balanced_over)
+pred.treelic <- predict(treelic, newdata = test)
+
+#accuracy.meas, it computes important metrics such as precision, recall & F measure
+accuracy.meas(test$Action, pred.treelic[,2])
+
+#check ROC to test if model is worth
+roc.curve(test$Action, pred.treelic[,2], plotit = F)
+
+#confusion matrix
+
+# Get prediction as a class for rpart and not as probability
+
+pred.treelic <- predict(treelic, newdata = test, type = "class")
+
+# summarize results
+confusionMatrix(pred.treelic, test$Action)
+
+
+# 2- Under Sampling: Do Under sampling to make data more proportional
+data_balanced_under <- ovun.sample(Action ~ ., data = train, method = "under")$data
+table(data_balanced_under$Action)
+
+# Perform model based on under sampling and verify the results
+
+treelic_under <- rpart(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = data_balanced_under)
+pred.treelic_under <- predict(treelic_under, newdata = test)
+
+#accuracy.meas, it computes important metrics such as precision, recall & F measure
+accuracy.meas(test$Action, pred.treelic_under[,2])
+
+#check ROC to test if model is worth
+roc.curve(test$Action, pred.treelic_under[,2], plotit = F)
+
+#confusion matrix
+
+# Get prediction as a class for rpart and not as probability
+
+pred.treelic_under <- predict(treelic_under, newdata = test, type = "class")
+
+pred.treelic_under <- as.data.frame(pred.treelic_under)
+
+pred.treelic_under_test<- cbind(pred.treelic_under,test)
+
+# summarize results
+confusionMatrix(pred.treelic_under, test$Action)
+
+
+
+# Model 3 - Both : minority class is oversampled with replacement and majority class is undersampled without replacement.
+
+
+data_balanced_both <- ovun.sample(Action ~ ., data = train, method = "both")$data
+table(data_balanced_both$Action)
+
+# Perform model based on under sampling and verify the results
+
+treelic_both <- rpart(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = data_balanced_both)
+pred.treelic_both <- predict(treelic_both, newdata = test)
+
+#accuracy.meas, it computes important metrics such as precision, recall & F measure
+accuracy.meas(test$Action, pred.treelic_both[,2])
+
+#check ROC to test if model is worth
+roc.curve(test$Action, pred.treelic_both[,2], plotit = F)
+
+#confusion matrix
+
+# Get prediction as a class for rpart and not as probability
+
+pred.treelic_both <- predict(treelic_both, newdata = test, type = "class")
+
+pred.treelic_both <- as.data.frame(pred.treelic_under)
+
+pred.treelic_both_test<- cbind(pred.treelic_both,test)
+
+
+# summarize results
+confusionMatrix(pred.treelic_both, test$Action)
+
+
+# Model 4: Synthetically generate  data(SMOTE) - 
+
+data.rose <- ROSE(Action ~ ., data = train, , seed = 1)$data
+table(data.rose$Action)
+
+# Perform model based on under sampling and verify the results
+
+treelic_rose <- rpart(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = data.rose)
+pred.treelic_rose <- predict(treelic_rose, newdata = test)
+
+#accuracy.meas, it computes important metrics such as precision, recall & F measure
+accuracy.meas(test$Action, pred.treelic_rose[,2])
+
+#check ROC to test if model is worth
+roc.curve(test$Action, pred.treelic_rose[,2], plotit = F)
+
+#confusion matrix
+
+# Get prediction as a class for rpart and not as probability
+
+pred.treelic_rose <- predict(treelic_rose, newdata = test, type = "class")
+
+# summarize results
+confusionMatrix(pred.treelic_rose, test$Action)
+
+pred.treelic_rose <- as.data.frame(pred.treelic_rose)
+
+pred.treelic_rose_test<- cbind(pred.treelic_rose,test)
+
+table(test$Action)
+
+# feature hashing
+library(FeatureHashing)
+
+# Remove Date variables as feature hashing will not accomodate
+
+str(train8)
+
+train10 <- subset(train8, select = -c(when.Created,LastLogonTimeStamp))
+
+write.csv(train10, "train10_withoutdatevar.csv")
+
+
+set.seed(1234)
+split <- sample(nrow(train10), floor(0.7*nrow(train10)))
+objTrain <-train10[split,]
+objTest <- train10[-split,]
+
+outcomeName <- 'Action'
+predictorNames <- setdiff(names(objTrain),outcomeName)
+
+needs(FeatureHashing)
+objTrain_hashed = hashed.model.matrix(~., data=objTrain[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTrain_hashed = as(objTrain_hashed, "dgCMatrix")
+objTest_hashed = hashed.model.matrix(~., data=objTest[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTest_hashed = as(objTest_hashed, "dgCMatrix")
+ 
+rm(data)
+
+library(glmnet)
+
+  # Model GLMNET_Model_1
+
+glmnet.control()
+
+glmnetModel <- cv.glmnet(objTrain_hashed, objTrain[,outcomeName], family = "binomial")
+
+glmnetPredict <- predict(glmnetModel, objTest_hashed, type = "class", s = c(0, 0.01))
+
+
+# summarize results
+confusionMatrix(glmnetPredict[,'2'], objTest[,outcomeName]) 
+
+glmnetPredict <- as.data.frame(glmnetPredict)
+
+glmnetoutput <- cbind(objTest,glmnetPredict$'2')
+
+write.csv(glmnetoutput,"GLMNET_Model_1.csv")
+
+# Accuracy Accuracy : 0.9119,  Sensitivity : 0.9933   , specificity : 0.2130  
+
+===============================================================================================
+
+# Model XGB_model2
+
+# change the label to 0 and 1
+
+label <- as.data.frame(objTrain$Action)
+
+label$Action<- as.character(label$`objTrain$Action`)
+
+label$`objTrain$Action` <- NULL
+
+label$Action[label$Action == 'N'] <- 0
+label$Action[label$Action== 'Revoke license'] <- 1
+
+
+xgbmodel <- xgboost(data = objTrain_hashed, label = label$Action, nrounds = 2, objective = "reg:logistic")
+
+
+xgbPredict <- predict(xgbmodel, objTest_hashed)
+
+#Change the prediction to numeric
+
+prediction <- as.numeric(xgbPredict > 0.5)
+print(head(prediction))
+
+test <- as.data.frame(objTest$Action)
+
+test$Action <- test$`objTest$Action`
+test$`objTest$Action` <- NULL
+
+test$Action<- as.character(test$Action)
+
+test$Action[test$Action == 'N'] <- 0
+test$Action[test$Action == 'Revoke license'] <- 1
+
+
+err <- mean(as.numeric(prediction > 0.5) != test$Action)
+print(paste("test-error=", err))
+
+# summarize results
+
+confusionMatrix(data = prediction, reference = test$Action)
+
+prediction <- as.data.frame(prediction)
+
+XGB_model2 <- cbind(prediction,objTest)
+
+write.csv(XGB_model2, "XGB_model2.csv")
+
+
+# "test-error= 0.0774994647827018", Accuracy : 0.9225 ,  Sensitivity : 0.9880, specificity : 0.3607, Balanced Accuracy : 0.6743  
+
+# Model 3 - XGB_Model3
+
+# check for zero variance
+
+train <- objTrain
+
+train$Action <- NULL
+
+# check for zero variance
+zero.var = nearZeroVar(train, saveMetrics=TRUE)
+zero.var
+
+# Remove Account_Enabled, UserAccountControl and EmployeeType as the variance is low and even in information gain it showed very low significance
+
+train <- subset(train, select = -c(Account_Enabled, UserAccountControl, EmployeeType))
+
+y_train <- as.numeric(as.factor(label$Action))-1
+xgb_train <- xgb.DMatrix(model.matrix(~ ., data=train),label=y_train, missing=NA)
+xgb_test <- xgb.DMatrix(model.matrix(~ . , data=full[991:nrow(full),]), missing=NA)
+
+xgb_params_1 <- list(
+  objective = "reg:logistic",
+  eta = 0.8,                                                                   # learning rate
+  max.depth = 8,                                                                # max tree depth
+  eval_metric = "logloss"
+)
+
+xgb_cv_1  <- xgb.cv(data=objTrain_hashed, nfold=5, nround=300, params = xgb_params_1, early.stop.round = 50,label=y_train) 
+xgb_model <- xgboost(objTrain_hashed,nrounds=300,params = xgb_params_1, early.stop.round=TRUE,label=y_train)
+testpred<-as.data.frame(matrix(predict(xgb_model, objTest_hashed), byrow = nrow(objTrain_hashed)))
+
+#Change the prediction to numeric
+
+
+a <- c(0.095, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65)
+tocsv<-vector()
+cm<-vector()
+b<-as.data.frame(matrix(0,ncol = 16, nrow = 1))
+
+'''
+
+# Run this code for displaying the confusion matrix on the screen
+
+for(i in a) {
+
+prediction <- as.numeric(testpred > i)
+
+cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+print(i)
+print(cm)
+
+
+}
+
+
+'''
+
+# Run this code for displaying confusion matrix in a table
+
+for(i in a){
+  
+  
+    prediction <- as.numeric(testpred > i)
+    
+     cm<-vector()
+    cm <- confusionMatrix(data = prediction, reference = test$Action)
+      
+    
+      tocsv<-data.frame(cbind(i,t(cm$overall),t(cm$byClass)))
+      colnames(b) <- colnames(tocsv) 
+      
+      b<- rbind(tocsv,b)
+      
+      }
+     
+
+
+'''
+test <- as.data.frame(objTest$Action)
+
+test$Action <- test$`objTest$Action`
+test$`objTest$Action` <- NULL
+
+test$Action<- as.character(test$Action)
+
+test$Action[test$Action == 'N'] <- 0
+test$Action[test$Action == 'Revoke license'] <- 1
+'''
+
+# summarize results
+
+confusionMatrix(data = prediction, reference = test$Action)
+
+-------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------
+# Model 4
+# Model with limited variables
+  
+train10 <- read.csv("train10_withoutdatevar.csv")
+
+train11 <- subset(train10, select = c(Title,Department,PersonalTitle,
+                                     CostCenter,Office,GlobalCostCenter,
+                                     Dim4,Mep,
+                                     LegalEntity,O365.License,Site_OU))
+
+set.seed(1234)
+split <- sample(nrow(train10), floor(0.7*nrow(train10)))
+objTrain <-train10[split,]
+objTest <- train10[-split,]
+
+outcomeName <- 'Action'
+predictorNames <- setdiff(names(objTrain),outcomeName)
+
+needs(FeatureHashing)
+objTrain_hashed = hashed.model.matrix(~., data=objTrain[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTrain_hashed = as(objTrain_hashed, "dgCMatrix")
+objTest_hashed = hashed.model.matrix(~., data=objTest[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTest_hashed = as(objTest_hashed, "dgCMatrix")
+
+rm(data)
+
+needs(glmnet)
+
+# Model GLMNET_Model_1
+
+glmnet.control()
+
+glmnetModel <- cv.glmnet(objTrain_hashed, objTrain[,outcomeName], family = "binomial")
+
+glmnetPredict <- predict(glmnetModel, objTest_hashed, type = "class", s = c(0, 0.01))
+
+# summarize results
+
+needs(caret)
+confusionMatrix(glmnetPredict[,'2'], objTest[,outcomeName]) 
+
+glmnetPredict <- as.data.frame(glmnetPredict)
+
+glmnetoutput <- cbind(objTest,glmnetPredict$'2')
+
+write.csv(glmnetoutput,"GLMNET_Model_1.csv")
+
+# Accuracy Accuracy : 0.9359,  Sensitivity : 0.9977   , specificity : 0.4293  
+
+
+================================================================================================
+  
+# Model 5 - XGB with limited variables
+
+train10 <- read.csv("train10_withoutdatevar.csv")
+
+train11 <- subset(train10, select = c(Title,Department,Action,PersonalTitle,
+                                      CostCenter,Office,GlobalCostCenter,
+                                      Dim4,Mep,
+                                      LegalEntity,O365.License,Site_OU))
+
+set.seed(1234)
+split <- sample(nrow(train10), floor(0.7*nrow(train10)))
+objTrain <-train10[split,]
+objTest <- train10[-split,]  
+  
+
+# change the label to 0 and 1
+
+label <- as.data.frame(objTrain$Action)
+
+label$Action<- as.character(label$`objTrain$Action`)
+
+label$`objTrain$Action` <- NULL
+
+label$Action[label$Action == 'N'] <- 0
+label$Action[label$Action== 'Revoke license'] <- 1
+
+train<- objTrain
+train$Action <- NULL
+
+test$Action <- test$`objTest$Action`
+test$`objTest$Action` <- NULL
+
+test$Action<- as.character(test$Action)
+
+test$Action[test$Action == 'N'] <- 0
+test$Action[test$Action == 'Revoke license'] <- 1
+
+
+
+# check for zero variance
+zero.var = nearZeroVar(train, saveMetrics=TRUE)
+zero.var
+
+# Remove Account_Enabled, UserAccountControl and EmployeeType as the variance is low and even in information gain it showed very low significance
+library(needs)
+needs(xgboost)
+train <- subset(train, select = -c(Account_Enabled, UserAccountControl, EmployeeType))
+y_train <- as.numeric(as.factor(label$Action))-1
+xgb_train <- xgb.DMatrix(model.matrix(~ ., data=train),label=y_train, missing=NA)
+xgb_test <- xgb.DMatrix(model.matrix(~ . , data=full[991:nrow(full),]), missing=NA)
+
+
+
+xgb_params_1 <- list(
+  objective = "reg:logistic",
+  eta = 0.2,                                                                   # learning rate
+  max.depth = 9,                                                                # max tree depth
+  eval_metric = "logloss"
+)
+
+xgb_cv_1  <- xgb.cv(data=objTrain_hashed, nfold=5, nround=2000, params = xgb_params_1, early.stop.round = 50,label=y_train) 
+xgb_model <- xgboost(objTrain_hashed,nrounds=2000,params = xgb_params_1, early.stop.round=TRUE,label=y_train)
+testpred<-as.data.frame(matrix(predict(xgb_model, objTest_hashed), byrow = nrow(objTrain_hashed)))
+
+
+'''
+#Use this code for threshhold manually and export to excel
+prediction <- as.numeric(testpred > .070)
+
+  cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+prediction <- as.data.frame(prediction)
+
+xgboutput_07 <- cbind(objTest,prediction)
+
+write.csv(xgboutput_07,"xgboutput_.07.csv")
+
+'''
+
+#Change the prediction to numeric
+
+
+a <- c(0.095, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65)
+tocsv<-vector()
+cm<-vector()
+b2<-as.data.frame(matrix(0,ncol = 19, nrow = 1))
+
+'''
+
+# Run this code for displaying the confusion matrix on the screen
+
+for(i in a) {
+
+prediction <- as.numeric(testpred > i)
+
+cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+print(i)
+print(cm)
+
+
+}
+
+
+'''
+
+# Run this code for displaying confusion matrix in a table
+
+for(i in a){
+  
+  
+  prediction <- as.numeric(testpred > i)
+  
+  cm<-vector()
+  cm <- confusionMatrix(data = prediction, reference = test$Action)
+  
+  
+  tocsv<-data.frame(cbind(i,t(cm$overall),t(cm$byClass)))
+  colnames(b2) <- colnames(tocsv) 
+  
+  b2<- rbind(tocsv,b)
+  
+}
+
+write.csv(b,"b_eta_0_8.csv")
+
+write.csv(b1,"b1_eta_0_5.csv")
+
+write.csv(b2,"b2_eta_0_2.csv")
+'''
+test <- as.data.frame(objTest$Action)
+
+test$Action <- test$`objTest$Action`
+test$`objTest$Action` <- NULL
+
+test$Action<- as.character(test$Action)
+
+test$Action[test$Action == 'N'] <- 0
+test$Action[test$Action == 'Revoke license'] <- 1
+'''
+
+# summarize results
+
+confusionMatrix(data = prediction, reference = test$Action)
+=================================================================================================
+  
+# Model 6 - limited variables - XGB - 0.9948615  0.6846992 0.9636693 0.9406545 0.9636693 0.9948615, xgboutput_.65_eta0.2_9_model6
+  
+train10 <- read.csv("train10_withoutdatevar.csv")
+
+train10 <- subset(train10, select = -c(SID,Manager_Domain,Country_OU,UserAccountControl)
+
+# train10 <- subset(train10, select = c(Title,Department,Action,PersonalTitle,
+#                                       CostCenter,Office,GlobalCostCenter,
+#                                       Dim4,Mep,
+#                                       LegalEntity,O365.License,Site_OU))
+
+
+set.seed(1234)
+split <- sample(nrow(train10), floor(0.7*nrow(train10)))
+objTrain <-train10[split,]
+objTest <- train10[-split,]
+
+outcomeName <- 'Action'
+predictorNames <- setdiff(names(objTrain),outcomeName)
+
+# change the label to 0 and 1
+
+label <- as.data.frame(objTrain$Action)
+
+label$Action<- as.character(label$`objTrain$Action`)
+
+label$`objTrain$Action` <- NULL
+
+label$Action[label$Action == 'N'] <- 0
+label$Action[label$Action== 'Revoke license'] <- 1
+
+train<- objTrain
+train$Action <- NULL
+
+test<- objTest
+
+#test$`objTest$Action` <- NULL
+
+test$Action<- as.character(test$Action)
+
+test$Action[test$Action == 'N'] <- 0
+test$Action[test$Action == 'Revoke license'] <- 1
+
+needs(FeatureHashing)
+objTrain_hashed = hashed.model.matrix(~., data=objTrain[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTrain_hashed = as(objTrain_hashed, "dgCMatrix")
+objTest_hashed = hashed.model.matrix(~., data=objTest[,predictorNames], hash.size=2^12, transpose=FALSE)
+objTest_hashed = as(objTest_hashed, "dgCMatrix")  
+
+
+xgb_params_1 <- list(
+  objective = "reg:logistic",
+  eta = 0.2,                                                                   # learning rate
+  max.depth = 8,                                                                # max tree depth
+  eval_metric = "logloss"
+)
+y_train <- as.numeric(as.factor(label$Action))-1
+xgb_cv_1  <- xgb.cv(data=objTrain_hashed, nfold=10, nround=2000, params = xgb_params_1, early.stop.round = 100,label=y_train) 
+xgb_model <- xgboost(objTrain_hashed,nrounds=2000,params = xgb_params_1, early.stop.round=TRUE,label=y_train)
+testpred<-as.data.frame(matrix(predict(xgb_model, objTest_hashed), byrow = nrow(objTrain_hashed)))
+
+
+'''
+#Use this code for threshhold manually and export to excel
+prediction <- as.numeric(testpred > .070)
+
+cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+prediction <- as.data.frame(prediction)
+
+xgboutput_07 <- cbind(objTest,prediction)
+
+write.csv(xgboutput_07,"xgboutput_.07.csv")
+
+'''
+
+#Change the prediction to numeric
+
+
+a <- c(0.095, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65)
+tocsv<-vector()
+cm<-vector()
+b<-as.data.frame(matrix(0,ncol = 19, nrow = 1))
+
+'''
+
+# Run this code for displaying the confusion matrix on the screen
+
+for(i in a) {
+
+prediction <- as.numeric(testpred > .65)
+
+cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+print(i)
+print(cm)
+
+
+}
+
+
+'''
+
+# Run this code for displaying confusion matrix in a table
+
+for(i in a){
+  
+  
+  prediction <- as.numeric(testpred > i)
+  
+  cm<-vector()
+  cm <- confusionMatrix(data = prediction, reference = test$Action)
+  
+  
+  tocsv<-data.frame(cbind(i,t(cm$overall),t(cm$byClass)))
+  colnames(b) <- colnames(tocsv) 
+  
+  b<- rbind(tocsv,b)
+  
+}
+
+
+'''
+#Use this code for threshhold manually and export to excel
+prediction <- as.numeric(testpred > .65)
+
+  cm <- confusionMatrix(data = prediction, reference = test$Action)
+
+prediction <- as.data.frame(prediction)
+
+xgboutput_65 <- cbind(objTest,prediction)
+
+write.csv(xgboutput_65,"xgboutput_.65_eta0.2_9_model6.csv")
+
+'''
+
+
+====================================================================================================
+
+# set random seed, for reproducibility 
+set.seed(1234)
+# k-fold cross validation, with timing
+nround.cv = 200
+system.time( bst.cv <- xgb.cv(param=param, data=objTrain_hashed, label=label$Action, 
+                              nfold=4, nrounds=nround.cv, prediction=TRUE, verbose=FALSE) )
+
+# Model 2 - Naive Bayes with top 10 features
+
+
+library(e1071)
+
+library(caret)
+
+ind <- createDataPartition(train8$Action, p=.7, list = F, times = 1)
+train <- train8[ ind,]
+test  <- train8[-ind,]
+
+
+xtrain <- train[,-4]
+xtest <- test[,-4]
+
+ytest<- test$Action
+
+
+
+naive<- naiveBayes(Action ~ Title + Department + PersonalTitle + CostCenter + Office + GlobalCostCenter + Dim4 + Mep + LegalEntity, data = train)
+
+pred <- predict(naive, xtest)
+
+actualspred <- cbind(pred,test)
+
+prop.table(table(predict(naive,xtest)))
+
+
+tab1 <- table(pred, ytest)
+
+tab1
+sum(tab1[row(tab1)==col(tab1)])/sum(tab1)
+
+
+#Model 3 - With only top 5 variables
+
+naive<- naiveBayes(Action ~ Title + Department + PersonalTitle + CostCenter + Office , data = train7)
+
+pred <- predict(naive, xtest)
+prop.table(table(predict(naive,xtest)))
+
+tab1 <- table(pred, ytest)
+
+tab1
+sum(tab1[row(tab1)==col(tab1)])/sum(tab1)
+
+
+library(FSelector)
+weights <- information.gain(Action~., train8)
+
+
+train8$Department <- as.factor(train8$Department)
+
+
+#Model 4 Naive Bayes - With only top 5 variables - cost center removed from Department
+
+naive<- naiveBayes(Action ~ Title + Department + PersonalTitle + CostCenter + Office , data = train)
+
+actual_pred<- cbind(pred,ytest)
+
+# actual_pred<- cbind(pred,test)
+
+
+prop.table(table(predict(naive,xtest)))
+
+tab1 <- table(pred, ytest)
+
+# tab2 <- table(pred, test)
+
+
+as.data.frame(tab1)
+
+tab1
+sum(tab1[row(tab1)==col(tab1)])/sum(tab1)
+
+train
