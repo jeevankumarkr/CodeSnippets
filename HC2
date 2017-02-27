@@ -1,0 +1,147 @@
+
+#Import data i.e. 
+HC=read.csv("HR.csv")
+head(HC)
+
+# Transpose the data
+
+thc <- as.data.frame(t(HC))
+
+View(thc)
+
+library(data.table)
+
+thc1 <- setDT(thc, keep.rownames = TRUE)
+
+
+thc1 -> train
+
+#Make first row as column Header
+
+train <- sapply(train, as.character)
+
+str(train)
+
+colnames(train) <- train[1, ]
+
+colnames(train)
+train <- as.data.frame(train[-1,])
+
+train <- as.data.frame(train[,-10])
+
+names(train)[names(train)=="X"] <- "Month"
+
+names(train)
+
+
+str(train)
+
+train1 <- train
+
+train1 <- sapply(train1[2:9], as.numeric)
+
+train1 <- as.data.frame(train1)
+
+write.csv(train,"HC_D.csv")
+
+train <- read.csv("HC_D.csv")
+
+train <- train[,2:10]
+
+str(train)
+
+sim <- train[,-1]
+
+sim <- as.data.frame(sapply(sim, as.numeric))
+
+sim <- setDT(sim, keep.rownames = TRUE)
+
+library(e1071)
+
+train1 <- train[,-c(1,10)]
+
+str(train1)
+
+train1 <- train[2:9]
+
+ind <- sample(train1,2, prob = c(0.8,0.2))
+
+
+write.csv(testdata,"testdata.csv")
+
+traindata <- read.csv("traindata.csv")
+
+testdata <- read.csv("testdata.csv")
+
+traindata <- traindata[,2:10]
+
+str(traindata)
+
+# perform a grid search
+tuneResult <- tune(svm, Headcount ~ .,  data = traindata1,
+                   ranges = list(epsilon = seq(0,1,0.1), cost = 2^(2:9)))
+str(traindata)
+
+print(tuneResult)
+# best performance: MSE = 8.371412, RMSE = 2.89 epsilon 1e-04 cost 4
+# Draw the tuning graph
+plot(tuneResult)
+
+rmse <- function(error)
+{
+  sqrt(mean(error^2))
+  
+}
+
+colnames(traindata)
+
+testdata1<- testdata[,-4]
+
+traindata1 <- traindata[2:9]
+testdata1<- testdata1[,2:8]
+
+tunedModel <- tuneResult$best.model
+tunedModelY <- predict(tunedModel, testdata1) 
+
+tunedModelY <- as.data.frame(tunedModelY)
+
+error <- traindata1$Headcount - tunedModelY  
+
+# this value can be different on your computer
+# because the tune method  randomly shuffles the data
+tunedModelRMSE <- rmse(error)  # 2.219642  
+
+tunedModelRMSE
+  
+plot(train1$Headcount)
+
+points(train1$Headcount, tunedModelY, col = "red", pch=20)
+
+
+ind <- sample(2,nrow(train1),2,prob = c(0.80,0.20))
+
+traindata <- train1[ind==1,]
+testdata <- train1[ind==2,]
+
+# Build Graph
+
+distPred <- tunedModelY
+
+###distPred <- predict(lmMod, testData)  # predict distance
+
+# Calculate prediction accuracy
+
+actuals_preds <- data.frame(cbind(actuals=testdata[,c("Month","Headcount")],predicteds=distPred))  # make actuals_predicteds dataframe.
+correlation_accuracy <- cor(actuals_preds)  # 82.7%
+head(actuals_preds)
+
+
+#Make graph
+library(reshape)
+long_data=melt(actuals_preds,id="actuals.Month")
+library(ggplot2)
+ggplot(data=long_data,aes(x=actuals.Month,y=value,colour=variable,group=variable))+geom_line(size=2)+ggtitle("Observed VS Actual")+ labs(x="Month",y="Head Count")+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ theme(axis.text=element_text(size=10),axis.title=element_text(size=14,face="bold"))+ theme(plot.title = element_text(size=30))
+
+
+train2 <- train1
+
